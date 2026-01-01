@@ -1,5 +1,13 @@
-importScripts('../../lib/pyodide/pyodide.js');
-importScripts('../../dist/wgpy-worker.js');
+// Load Pyodide from CDN
+const PYODIDE_VERSION = 'v0.26.4';
+importScripts(`https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/pyodide.js`);
+
+// Try to load wgpy-worker.js if available (for GPU support)
+try {
+  importScripts('../../dist/wgpy-worker.js');
+} catch (e) {
+  console.log('wgpy-worker.js not found, GPU features will not be available');
+}
 
 let pyodide;
 let initialized = false;
@@ -10,6 +18,28 @@ function log(message) {
 
 function displayImage(url) {
   postMessage({ namespace: 'app', method: 'displayImage', url });
+}
+
+function displayImageRaw(numpyArray, width, height) {
+  // Extract the underlying buffer from NumPy array via Pyodide's buffer protocol
+  // getBuffer returns an object with { data: TypedArray, ... }
+  const bufferInfo = numpyArray.getBuffer('u8');
+  
+  // Get the TypedArray's underlying buffer, only the data portion
+  // Calculate the correct size: width * height * 4 (RGBA)
+  const expectedSize = width * height * 4;
+  const buffer = bufferInfo.data.buffer.slice(bufferInfo.data.byteOffset, bufferInfo.data.byteOffset + expectedSize);
+  
+  console.log(`Worker: sending buffer of size ${buffer.byteLength}, expected ${expectedSize}`);
+  
+  // Transfer ArrayBuffer for zero-copy
+  postMessage({ 
+    namespace: 'app', 
+    method: 'displayImageRaw', 
+    buffer: buffer, 
+    width, 
+    height 
+  }, [buffer]);
 }
 
 function stdout(line) {
@@ -37,7 +67,7 @@ async function start(config) {
 
   log('Loading pyodide');
   pyodide = await loadPyodide({
-    indexURL: '../../lib/pyodide/',
+    indexURL: `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`,
     stdout: stdout,
     stderr: stdout,
   });
@@ -57,6 +87,7 @@ async function start(config) {
   self.pythonIO = {
     config,
     displayImage,
+    displayImageRaw,
   };
   log('Running python code');
   await pyodide.runPythonAsync(pythonCode);

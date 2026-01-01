@@ -4,11 +4,6 @@ import cupy as cp
 import cupyx.scipy
 import time
 
-# for visualization
-from PIL import Image
-import io
-import base64
-
 use_gpu = pythonIO.config.use_gpu
 kernel_type = pythonIO.config.kernel_type
 np.random.seed(0)
@@ -124,11 +119,18 @@ def generate_input(grid: int, real_min=-2.0, real_max=0.5, imag_min=-1.2, imag_m
 def visualize(grid: int, real_min=-2.0, real_max=0.5, imag_min=-1.2, imag_max=1.2):
     print(f"visualizeing grid={grid}")
     real, imag = generate_input(grid, real_min, real_max, imag_min, imag_max)
+    
     start_time = time.time()
     ret_gpu = run_once(real, imag, use_gpu, kernel_type)
-    end_time = time.time()
-    print(f"elapsed time: {end_time - start_time:.3f} sec")
-    display_image(count_to_img(ret_gpu))
+    gpu_time = time.time()
+    
+    rgba = count_to_rgba(ret_gpu)
+    color_time = time.time()
+    
+    display_image(rgba)
+    display_time = time.time()
+    
+    print(f"GPU compute: {(gpu_time - start_time)*1000:.1f}ms, Color map: {(color_time - gpu_time)*1000:.1f}ms, Display: {(display_time - color_time)*1000:.1f}ms, Total: {(display_time - start_time)*1000:.1f}ms")
 
 
 def hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
@@ -167,22 +169,54 @@ def generate_color_map():
 color_map = generate_color_map()
 
 
-def count_to_img(count):
-    # TODO: improve visualization with colormap
-    # f = count.astype(np.float32)
-    # f = f / f.max()
-    # return Image.fromarray(
-    #     np.repeat((f * 255.0)[..., np.newaxis].astype(np.uint8), 3, axis=2)
-    # )
-    return Image.fromarray(color_map[count])
+def count_to_rgba(count):
+    # Direct color mapping - optimized vectorized version
+    height, width = count.shape
+    
+    # Normalize count to 0-1 range
+    t = count.astype(np.float32) / n_iters
+    
+    # HSV to RGB conversion on the full array
+    h = 0.66 * (1.0 - t)  # Hue from blue to red
+    s = 0.9
+    v = 0.95
+    
+    # Set points at max iterations to white
+    mask = (count == n_iters)
+    h[mask] = 0
+    s_arr = np.where(mask, 0, s)
+    v_arr = np.where(mask, 1.0, v)
+    
+    # HSV to RGB vectorized (optimized)
+    i = (h * 6.0).astype(np.int32) % 6
+    f = h * 6.0 - i
+    p = v_arr * (1.0 - s_arr)
+    q = v_arr * (1.0 - f * s_arr)
+    t_hsv = v_arr * (1.0 - (1.0 - f) * s_arr)
+    
+    # Direct assignment based on i value (faster than np.select)
+    r = np.empty_like(h)
+    g = np.empty_like(h)
+    b = np.empty_like(h)
+    
+    m0 = (i == 0); r[m0] = v_arr[m0]; g[m0] = t_hsv[m0]; b[m0] = p[m0]
+    m1 = (i == 1); r[m1] = q[m1]; g[m1] = v_arr[m1]; b[m1] = p[m1]
+    m2 = (i == 2); r[m2] = p[m2]; g[m2] = v_arr[m2]; b[m2] = t_hsv[m2]
+    m3 = (i == 3); r[m3] = p[m3]; g[m3] = q[m3]; b[m3] = v_arr[m3]
+    m4 = (i == 4); r[m4] = t_hsv[m4]; g[m4] = p[m4]; b[m4] = v_arr[m4]
+    m5 = (i == 5); r[m5] = v_arr[m5]; g[m5] = p[m5]; b[m5] = q[m5]
+    
+    rgba = np.empty((height, width, 4), dtype=np.uint8)
+    rgba[:, :, 0] = (r * 255.0).astype(np.uint8)
+    rgba[:, :, 1] = (g * 255.0).astype(np.uint8)
+    rgba[:, :, 2] = (b * 255.0).astype(np.uint8)
+    rgba[:, :, 3] = 255
+    
+    return rgba
 
 
-def display_image(img):
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format="PNG", compress_level=0)
-    png_bin = img_bytes.getvalue()
-    # to base64 data url
-    import base64
-
-    png_b64 = base64.b64encode(png_bin).decode("ascii")
-    pythonIO.displayImage(f"data:image/png;base64,{png_b64}")
+def display_image(rgba_array):
+    # Zero-copy approach: send raw RGBA pixel data directly
+    # Pass the numpy array itself, JavaScript will extract the buffer
+    print(f"Array shape: {rgba_array.shape}, size: {rgba_array.size}, dtype: {rgba_array.dtype}")
+    pythonIO.displayImageRaw(rgba_array, rgba_array.shape[1], rgba_array.shape[0])
