@@ -13,7 +13,8 @@ function getConfig() {
   if (!use_gpu) {
     backend = 'webgl';
   }
-  const kernel_type = 'custom';
+  // Use custom_rgba for direct GPU RGBA output (eliminates CPU color conversion)
+  const kernel_type = use_gpu ? 'custom_rgba' : 'custom';
 
   return { backend, use_gpu, kernel_type, grid };
 }
@@ -38,9 +39,39 @@ async function run() {
   config.backend = initializedBackend; // actually initialized backend
   log(`Initialized backend: ${initializedBackend}`);
 
-  // Canvas for zero-copy rendering
+  // Canvas for rendering
   let canvas = null;
   let ctx = null;
+
+  // Setup WebGPU canvas if using GPU direct rendering
+  if (initializedBackend === 'webgpu' && config.use_gpu) {
+    canvas = document.createElement('canvas');
+    canvas.width = grid;
+    canvas.height = grid;
+    canvas.style.width = '512px';
+    canvas.style.height = '512px';
+
+    // Replace img with canvas (keep same ID for event listeners)
+    let displayElement = document.getElementById('mandelbrotImage');
+    if (displayElement) {
+      displayElement.parentNode.replaceChild(canvas, displayElement);
+      canvas.id = 'mandelbrotImage';  // Use same ID so setupInteractionListeners works
+    }
+
+    // Initialize WebGPU canvas context
+    if (typeof wgpy.initCanvasContext === 'function') {
+      try {
+        await wgpy.initCanvasContext(canvas);
+        config.kernel_type = 'gpu_direct';
+        log('GPU direct rendering enabled');
+      } catch (e) {
+        log(`Failed to initialize canvas context: ${e.message}`);
+        // Fall back to CPU colorization
+      }
+    }
+
+    setupInteractionListeners();
+  }
 
   worker.addEventListener('message', (e) => {
     if (e.data.namespace !== 'app') {
@@ -56,15 +87,16 @@ async function run() {
         document.getElementById('mandelbrotImage').src = e.data.url;
         break;
       case 'displayImageRaw':
+        // Skip ImageData rendering if using GPU direct mode
+        if (config.kernel_type === 'gpu_direct') {
+          isRendering = false;
+          break;
+        }
+
         const t0 = performance.now();
-        // Zero-copy rendering directly to canvas
+        // True zero-copy rendering using SharedArrayBuffer
         let displayElement = document.getElementById('mandelbrotImage');
-        
-        // Debug: check buffer size
-        const expectedSize = e.data.width * e.data.height * 4;
-        const actualSize = e.data.buffer.byteLength;
-        
-        const t1 = performance.now();
+
         if (!canvas || canvas.width !== e.data.width || canvas.height !== e.data.height) {
           canvas = document.createElement('canvas');
           canvas.width = e.data.width;
@@ -73,25 +105,22 @@ async function run() {
           canvas.style.height = '512px';
           ctx = canvas.getContext('2d', { willReadFrequently: false });
           // Replace img/old canvas with new canvas
-          displayElement.parentNode.replaceChild(canvas, displayElement);
+          if (displayElement) {
+            displayElement.parentNode.replaceChild(canvas, displayElement);
+          }
           canvas.id = 'mandelbrotImage';
-          
+
           // Reattach event listeners to the new canvas
           setupInteractionListeners();
         }
-        
-        const t2 = performance.now();
-        const imageData = new ImageData(
-          new Uint8ClampedArray(e.data.buffer),
-          e.data.width,
-          e.data.height
-        );
-        const t3 = performance.now();
+
+        // Create ImageData from transferred buffer
+        const imageData = new ImageData(new Uint8ClampedArray(e.data.buffer), e.data.width, e.data.height);
+
+        // Render to canvas
         ctx.putImageData(imageData, 0, 0);
-        const t4 = performance.now();
-        
+
         isRendering = false; // Mark render complete
-        console.log(`JS: setup ${(t1-t0).toFixed(1)}ms, canvas ${(t2-t1).toFixed(1)}ms, ImageData ${(t3-t2).toFixed(1)}ms, putImageData ${(t4-t3).toFixed(1)}ms, total ${(t4-t0).toFixed(1)}ms`);
         break;
     }
   });
@@ -102,7 +131,6 @@ async function run() {
 
 function render(x_min, x_max, y_min, y_max) {
   if (worker) {
-    console.log({ namespace: 'app', method: 'render', grid, x_min, x_max, y_min, y_max })
     worker.postMessage({ namespace: 'app', method: 'render', grid, x_min, x_max, y_min, y_max });
   }
 }

@@ -42,6 +42,18 @@ class WebGPUPlatform:
     def runKernel(self, descriptor):
         return gpu.runKernel(descriptor)
 
+    def createTexture(self, texture_id: int, width: int, height: int, format: str = "rgba8unorm"):
+        return gpu.createTexture(texture_id, width, height, format)
+
+    def disposeTexture(self, texture_id: int):
+        return gpu.disposeTexture(texture_id)
+
+    def copyBufferToTexture(self, buffer_id: int, texture_id: int, width: int, height: int):
+        return gpu.copyBufferToTexture(buffer_id, texture_id, width, height)
+
+    def presentTexture(self, texture_id: int):
+        return gpu.presentTexture(texture_id)
+
 
 _instance = None
 

@@ -28,11 +28,52 @@ backend = cp.get_backend_name()
 if backend == "webgpu":
     from wgpy_backends.webgpu import get_performance_metrics
     from wgpy_backends.webgpu.elementwise_kernel import ElementwiseKernel
+    from wgpy_backends.webgpu.webgpu_texture import WebGPUTexture
+    from wgpy_backends.webgpu.colorize_kernel import ColorizeKernel
 elif backend == "webgl":
     from wgpy_backends.webgl import get_performance_metrics
     from wgpy_backends.webgl.elementwise_kernel import ElementwiseKernel
 
 _bs_kernels = {}
+_rgba_kernels = {}
+
+
+def customMandelbrotRGBA(R, I, n_iters):
+    """Compute Mandelbrot iteration count on GPU"""
+    if backend == "webgpu":
+        # Single GPU kernel: compute iteration count only
+        if (_rgba_kernel := _rgba_kernels.get(n_iters)) is None:
+            _rgba_kernel = ElementwiseKernel(
+                in_params="f32 real, f32 imag",
+                out_params="i32 count",
+                operation="""
+// Compute Mandelbrot iteration count
+var c: i32 = 0;
+var x: f32 = 0.0;
+var y: f32 = 0.0;
+for(var k: u32 = 0u; k < """
+                + str(n_iters)
+                + """u; k = k + 1u) {
+    var nx: f32 = x * x - y * y + real;
+    var ny: f32 = x * y * 2.0 + imag;
+    x = nx;
+    y = ny;
+    if (x * x + y * y < 4.0) {
+        c = c + 1;
+    }
+}
+count = c;
+                """,
+                name=f"mandelbrot_iter_{n_iters}",
+            )
+            _rgba_kernels[n_iters] = _rgba_kernel
+        
+        # Return iteration counts - let count_to_rgba handle colorization
+        return _rgba_kernel(R, I)
+    elif backend == "webgl":
+        # WebGL version TBD - use CPU fallback for now
+        return None
+    raise ValueError
 
 
 def customMandelbrot(R, I, n_iters):
@@ -101,6 +142,18 @@ def run_once(real, imag, use_gpu, kernel_type):
             ret = mandelbrot(real, imag, n_iters)
         elif kernel_type == "custom":
             ret = customMandelbrot(real, imag, n_iters)
+        elif kernel_type == "custom_rgba":
+            # GPU computes RGBA directly - single GPU->CPU transfer!
+            ret = customMandelbrotRGBA(real, imag, n_iters)
+            if ret is not None:
+                # Already RGBA on GPU, just transfer to CPU
+                return cp.asnumpy(ret)
+            else:
+                # Fallback to CPU path
+                ret = mandelbrot(real, imag, n_iters)
+                if use_gpu:
+                    ret = cp.asnumpy(ret)
+                return ret
         else:
             raise ValueError
     else:
@@ -117,20 +170,25 @@ def generate_input(grid: int, real_min=-2.0, real_max=0.5, imag_min=-1.2, imag_m
 
 
 def visualize(grid: int, real_min=-2.0, real_max=0.5, imag_min=-1.2, imag_max=1.2):
-    print(f"visualizeing grid={grid}")
-    real, imag = generate_input(grid, real_min, real_max, imag_min, imag_max)
-    
-    start_time = time.time()
-    ret_gpu = run_once(real, imag, use_gpu, kernel_type)
-    gpu_time = time.time()
-    
-    rgba = count_to_rgba(ret_gpu)
-    color_time = time.time()
-    
-    display_image(rgba)
-    display_time = time.time()
-    
-    print(f"GPU compute: {(gpu_time - start_time)*1000:.1f}ms, Color map: {(color_time - gpu_time)*1000:.1f}ms, Display: {(display_time - color_time)*1000:.1f}ms, Total: {(display_time - start_time)*1000:.1f}ms")
+    # Use GPU direct rendering if WebGPU backend and kernel_type is gpu_direct
+    if use_gpu and backend == "webgpu" and kernel_type == "gpu_direct":
+        visualize_gpu_direct(grid, real_min, real_max, imag_min, imag_max)
+    else:
+        # Existing CPU path
+        real, imag = generate_input(grid, real_min, real_max, imag_min, imag_max)
+
+        start_time = time.time()
+        ret_gpu = run_once(real, imag, use_gpu, kernel_type)
+        gpu_time = time.time()
+
+        # If kernel_type is custom_rgba, ret_gpu is already RGBA
+        if kernel_type == "custom_rgba" and ret_gpu.ndim == 3:
+            rgba = ret_gpu
+        else:
+            rgba = count_to_rgba(ret_gpu)
+        color_time = time.time()
+
+        display_image(rgba)
 
 
 def hsv_to_rgb(hsv: np.ndarray) -> np.ndarray:
@@ -169,54 +227,75 @@ def generate_color_map():
 color_map = generate_color_map()
 
 
+def create_gpu_color_map():
+    """Upload color map to GPU as packed RGBA u32 buffer"""
+    rgba_packed = np.empty(n_iters + 1, dtype=np.uint32)
+    for i in range(n_iters + 1):
+        r, g, b = color_map[i]
+        # Pack as little-endian ABGR (0xAABBGGRR)
+        rgba_packed[i] = np.uint32((255 << 24) | (b << 16) | (g << 8) | r)
+    return cp.asarray(rgba_packed)
+
+
+# Initialize GPU rendering components if using WebGPU
+gpu_color_map = None
+colorize_kernel_instance = None
+render_texture = None
+
+if use_gpu and backend == "webgpu":
+    gpu_color_map = create_gpu_color_map()
+    colorize_kernel_instance = ColorizeKernel(n_iters + 1)
+
+
 def count_to_rgba(count):
-    # Direct color mapping - optimized vectorized version
+    # Use pre-computed color map with optimized indexing
     height, width = count.shape
     
-    # Normalize count to 0-1 range
-    t = count.astype(np.float32) / n_iters
+    # Clamp count values to valid range [0, n_iters]
+    count_clamped = np.minimum(count, n_iters)
     
-    # HSV to RGB conversion on the full array
-    h = 0.66 * (1.0 - t)  # Hue from blue to red
-    s = 0.9
-    v = 0.95
-    
-    # Set points at max iterations to white
-    mask = (count == n_iters)
-    h[mask] = 0
-    s_arr = np.where(mask, 0, s)
-    v_arr = np.where(mask, 1.0, v)
-    
-    # HSV to RGB vectorized (optimized)
-    i = (h * 6.0).astype(np.int32) % 6
-    f = h * 6.0 - i
-    p = v_arr * (1.0 - s_arr)
-    q = v_arr * (1.0 - f * s_arr)
-    t_hsv = v_arr * (1.0 - (1.0 - f) * s_arr)
-    
-    # Direct assignment based on i value (faster than np.select)
-    r = np.empty_like(h)
-    g = np.empty_like(h)
-    b = np.empty_like(h)
-    
-    m0 = (i == 0); r[m0] = v_arr[m0]; g[m0] = t_hsv[m0]; b[m0] = p[m0]
-    m1 = (i == 1); r[m1] = q[m1]; g[m1] = v_arr[m1]; b[m1] = p[m1]
-    m2 = (i == 2); r[m2] = p[m2]; g[m2] = v_arr[m2]; b[m2] = t_hsv[m2]
-    m3 = (i == 3); r[m3] = p[m3]; g[m3] = q[m3]; b[m3] = v_arr[m3]
-    m4 = (i == 4); r[m4] = t_hsv[m4]; g[m4] = p[m4]; b[m4] = v_arr[m4]
-    m5 = (i == 5); r[m5] = v_arr[m5]; g[m5] = p[m5]; b[m5] = q[m5]
-    
+    # Create RGBA array directly
     rgba = np.empty((height, width, 4), dtype=np.uint8)
-    rgba[:, :, 0] = (r * 255.0).astype(np.uint8)
-    rgba[:, :, 1] = (g * 255.0).astype(np.uint8)
-    rgba[:, :, 2] = (b * 255.0).astype(np.uint8)
+    
+    # Use take to index into color map (faster than fancy indexing)
+    colors = np.take(color_map, count_clamped, axis=0)
+    rgba[:, :, :3] = colors.reshape(height, width, 3)
     rgba[:, :, 3] = 255
     
     return rgba
 
 
+def visualize_gpu_direct(grid: int, real_min=-2.0, real_max=0.5, imag_min=-1.2, imag_max=1.2):
+    """GPU-to-canvas rendering path (zero GPU→CPU transfer)"""
+    global render_texture
+
+    real, imag = generate_input(grid, real_min, real_max, imag_min, imag_max)
+
+    # Step 1: Compute iteration counts on GPU
+    real_gpu = cp.asarray(real)
+    imag_gpu = cp.asarray(imag)
+    count_gpu = customMandelbrot(real_gpu, imag_gpu, n_iters)  # (grid, grid) int32
+
+    # Step 2: Colorize on GPU (iteration counts → RGBA)
+    rgba_gpu = colorize_kernel_instance(count_gpu, gpu_color_map)  # (grid, grid) uint32
+
+    # Step 3: Create or reuse texture
+    if render_texture is None or render_texture.width != grid or render_texture.height != grid:
+        if render_texture is not None:
+            del render_texture
+        render_texture = WebGPUTexture(grid, grid, "rgba8unorm")
+
+    # Step 4: Copy GPU buffer to texture
+    render_texture.copy_from_buffer(rgba_gpu.buffer.buffer_id)
+
+    # Step 5: Present texture to canvas
+    render_texture.present()
+
+    # Signal completion to main thread (enables continuous rendering during drag)
+    pythonIO.displayImageRaw(np.empty((1, 1, 4), dtype=np.uint8), 1, 1)
+
+
 def display_image(rgba_array):
     # Zero-copy approach: send raw RGBA pixel data directly
     # Pass the numpy array itself, JavaScript will extract the buffer
-    print(f"Array shape: {rgba_array.shape}, size: {rgba_array.size}, dtype: {rgba_array.dtype}")
     pythonIO.displayImageRaw(rgba_array, rgba_array.shape[1], rgba_array.shape[0])

@@ -4,11 +4,19 @@
 
 import micropip
 
-await micropip.install("/lib/chainer-5.4.0-py3-none-any.whl")
+from js import pythonIO
+base_url = pythonIO.baseUrl
+
+try:
+    await micropip.install(f"{base_url}/lib/chainer-5.4.0-py3-none-any.whl")
+except Exception as e:
+    raise RuntimeError(
+        f"Failed to install Chainer wheel. Error: {e}"
+    ) from e
+
 from pyodide.http import pyfetch
 
 import json
-from js import pythonIO
 import numpy as np
 import chainer
 from chainer import training
@@ -20,7 +28,7 @@ from chainer.training import extensions
 
 
 response = await pyfetch(
-    "/lib/mnist-subset-5k.zip"
+    f"{base_url}/lib/mnist-subset-5k.zip"
 )  # mnist.zip contains train.npz, test.npz
 await response.unpack_archive(
     extract_dir="/home/pyodide/.chainer/dataset/pfnet/chainer/mnist", format="zip"

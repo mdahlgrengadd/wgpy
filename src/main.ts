@@ -2,6 +2,8 @@ import { WgpyBackend } from './backend';
 import { ComputeContextGL } from './webgl/webglComputeContext';
 import { ComputeContextGPU } from './webgpu/webgpuComputeContext';
 
+let globalContextGPU: ComputeContextGPU | null = null;
+
 export interface WgpyInitOptions {
   // specify the order of backend to try. default: ['webgpu', 'webgl']
   // if ['webgpu', 'webgl'] is specified, webgpu will be tried first, and if it fails, webgl will be tried.
@@ -36,6 +38,7 @@ export async function initMain(worker: Worker, options: WgpyInitOptions): Promis
       try {
         await contextGPU.init();
         initializedBackend = backend;
+        globalContextGPU = contextGPU;
       } catch (error) {
         console.error(
           `wgpy: failed to initialize WebGPU context: ${(error as any)?.message}`
@@ -90,4 +93,11 @@ export async function initMain(worker: Worker, options: WgpyInitOptions): Promis
   }
 
   return {backend: initializedBackend};
+}
+
+export async function initCanvasContext(canvas: HTMLCanvasElement): Promise<void> {
+  if (!globalContextGPU) {
+    throw new Error('WebGPU context not initialized. Call initMain with WebGPU backend first.');
+  }
+  await globalContextGPU.initCanvasContext(canvas);
 }

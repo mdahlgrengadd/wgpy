@@ -287,6 +287,30 @@ function initGPUInterface(gpuAvailable: boolean, gpuDeviceInfo: any) {
         descriptor: dictToObj(descriptor),
       });
     },
+    createTexture: (id: number, width: number, height: number, format: string) => {
+      postToMain({
+        method: 'gpu.createTexture',
+        id,
+        width,
+        height,
+        format,
+      });
+    },
+    disposeTexture: (id: number) => {
+      postToMain({ method: 'gpu.disposeTexture', id });
+    },
+    copyBufferToTexture: (bufferId: number, textureId: number, width: number, height: number) => {
+      postToMain({
+        method: 'gpu.copyBufferToTexture',
+        bufferId,
+        textureId,
+        width,
+        height,
+      });
+    },
+    presentTexture: (textureId: number) => {
+      postToMain({ method: 'gpu.presentTexture', textureId });
+    },
   };
 }
 

@@ -272,3 +272,8 @@ cython_debug/
 public/pyodide-webgpu/chainer-5.4.0-py3-none-any.whl
 public/pyodide-webgpu/mnist.zip
 public/pyodide-webgpu/cifar10_1k.npz
+# Hidden files and directories
+.*
+
+# Markdown files
+*.md

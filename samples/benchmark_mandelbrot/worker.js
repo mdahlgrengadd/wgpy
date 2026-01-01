@@ -1,4 +1,6 @@
-importScripts('../../lib/pyodide/pyodide.js');
+// Load Pyodide from CDN
+const PYODIDE_VERSION = 'v0.26.4';
+importScripts(`https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/pyodide.js`);
 importScripts('../../dist/wgpy-worker.js');
 
 let pyodide;
@@ -36,7 +38,7 @@ async function start(config) {
 
   log('Loading pyodide');
   pyodide = await loadPyodide({
-    indexURL: '../../lib/pyodide/',
+    indexURL: `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`,
     stdout: stdout,
     stderr: stdout,
   });
@@ -47,7 +49,8 @@ async function start(config) {
   if (initWorkerResult) {
     // load wgpy python package corresponding to the backend.
     // if wgpy is not initialized, wgpy (and cupy) is not available.
-    await pyodide.loadPackage(`../../dist/wgpy_${initWorkerResult.backend}-1.0.0-py3-none-any.whl`);
+    const wheelUrl = new URL(`../../dist/wgpy_${initWorkerResult.backend}-1.0.0-py3-none-any.whl`, self.location.href).href;
+    await pyodide.loadPackage(wheelUrl);
   }
 
   log('Loading pyodide succeeded');

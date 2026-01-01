@@ -6,7 +6,7 @@ importScripts(`https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/pyodide.
 try {
   importScripts('../../dist/wgpy-worker.js');
 } catch (e) {
-  console.log('wgpy-worker.js not found, GPU features will not be available');
+  // GPU features will not be available
 }
 
 let pyodide;
@@ -21,22 +21,23 @@ function displayImage(url) {
 }
 
 function displayImageRaw(numpyArray, width, height) {
-  // Extract the underlying buffer from NumPy array via Pyodide's buffer protocol
-  // getBuffer returns an object with { data: TypedArray, ... }
+  // Extract raw bytes from NumPy array
+  const size = width * height * 4;
   const bufferInfo = numpyArray.getBuffer('u8');
   
-  // Get the TypedArray's underlying buffer, only the data portion
-  // Calculate the correct size: width * height * 4 (RGBA)
-  const expectedSize = width * height * 4;
-  const buffer = bufferInfo.data.buffer.slice(bufferInfo.data.byteOffset, bufferInfo.data.byteOffset + expectedSize);
+  // Create a regular ArrayBuffer (ImageData doesn't support SharedArrayBuffer)
+  const buffer = new ArrayBuffer(size);
+  const targetView = new Uint8Array(buffer);
+  const srcData = new Uint8Array(bufferInfo.data.buffer, bufferInfo.data.byteOffset, size);
   
-  console.log(`Worker: sending buffer of size ${buffer.byteLength}, expected ${expectedSize}`);
+  // Copy data (single copy)
+  targetView.set(srcData);
   
-  // Transfer ArrayBuffer for zero-copy
+  // Transfer buffer to main thread (zero-copy transfer)
   postMessage({ 
     namespace: 'app', 
     method: 'displayImageRaw', 
-    buffer: buffer, 
+    buffer,
     width, 
     height 
   }, [buffer]);

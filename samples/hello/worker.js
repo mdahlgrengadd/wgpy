@@ -1,4 +1,6 @@
-importScripts('../../lib/pyodide/pyodide.js');
+// Load Pyodide from CDN
+const PYODIDE_VERSION = 'v0.26.4';
+importScripts(`https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/pyodide.js`);
 importScripts('../../dist/wgpy-worker.js');
 
 let pyodide;
@@ -21,11 +23,12 @@ async function start(backend, data) {
 
   log('Loading pyodide');
   pyodide = await loadPyodide({
-    indexURL: '../../lib/pyodide/',
+    indexURL: `https://cdn.jsdelivr.net/pyodide/${PYODIDE_VERSION}/full/`,
   });
   await pyodide.loadPackage('micropip');
   await pyodide.loadPackage('numpy');
-  await pyodide.loadPackage(`../../dist/wgpy_${initWorkerResult.backend}-1.0.0-py3-none-any.whl`);
+  const wheelUrl = new URL(`../../dist/wgpy_${initWorkerResult.backend}-1.0.0-py3-none-any.whl`, self.location.href).href;
+  await pyodide.loadPackage(wheelUrl);
 
   log('Loading pyodide succeeded');
   const pythonCode = await loadPythonCode();
