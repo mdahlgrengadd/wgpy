@@ -92,7 +92,7 @@ async function start(config) {
   };
   log('Running python code');
   await pyodide.runPythonAsync(pythonCode);
-  await pyodide.runPythonAsync(`visualize(${config.grid})`);
+  await pyodide.runPythonAsync(`visualize(${config.gridWidth})`);
   initialized = true;
 }
 

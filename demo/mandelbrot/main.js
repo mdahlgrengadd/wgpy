@@ -5,7 +5,9 @@ function log(message) {
   parent.appendChild(item);
 }
 
-const grid = 1024;
+const gridWidth = 1280;
+const gridHeight = 720;
+const grid = 1280; // Grid size for worker rendering
 
 function getConfig() {
   let backend = document.querySelector('input[name="backend"]:checked').value;
@@ -16,7 +18,7 @@ function getConfig() {
   // Use custom_rgba for direct GPU RGBA output (eliminates CPU color conversion)
   const kernel_type = use_gpu ? 'custom_rgba' : 'custom';
 
-  return { backend, use_gpu, kernel_type, grid };
+  return { backend, use_gpu, kernel_type, gridWidth, gridHeight };
 }
 
 let worker;
@@ -46,10 +48,10 @@ async function run() {
   // Setup WebGPU canvas if using GPU direct rendering
   if (initializedBackend === 'webgpu' && config.use_gpu) {
     canvas = document.createElement('canvas');
-    canvas.width = grid;
-    canvas.height = grid;
-    canvas.style.width = '512px';
-    canvas.style.height = '512px';
+    canvas.width = gridWidth;
+    canvas.height = gridHeight;
+    canvas.style.width = '1280px';
+    canvas.style.height = '720px';
 
     // Replace img with canvas (keep same ID for event listeners)
     let displayElement = document.getElementById('mandelbrotImage');
@@ -101,8 +103,8 @@ async function run() {
           canvas = document.createElement('canvas');
           canvas.width = e.data.width;
           canvas.height = e.data.height;
-          canvas.style.width = '512px';
-          canvas.style.height = '512px';
+          canvas.style.width = '1280px';
+          canvas.style.height = '720px';
           ctx = canvas.getContext('2d', { willReadFrequently: false });
           // Replace img/old canvas with new canvas
           if (displayElement) {
